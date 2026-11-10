@@ -48,6 +48,11 @@ const S = {
   staleCodeWarned: false,
   // 小红花记录的当前页码（0 起）；翻页是纯前端状态，不写进存档（第 94 轮）
   ledgerPage: 0,
+  // 打印清单的勾选项（第 97 轮）；跟设备走，存 localStorage，不写进存档。
+  // 注意：这里**不能**直接写 loadPrintOpts() —— 它依赖的 PRINT_OPTS_DEFAULT
+  // 是下面的 const，此刻还在 TDZ 里，会直接把整个 app 崩掉（踩过）。
+  // 真正的初始化在那些常量定义完之后，见 S.printOpts = loadPrintOpts()。
+  printOpts: null,
 };
 
 const LS_ROOM = 'hb_room';
@@ -2661,6 +2666,12 @@ function parentHomework() {
 
     '<section class="panel">' +
       '<div class="panel-head"><h2>📚 ' + C.friendlyDate(S.date) + '的作业（' + day.homeworks.length + '）</h2>' +
+        /*
+         * 第 97 轮：打印按钮放标题右边。
+         * 打的是**当前选中的这一天**（在看昨天的作业时点它，打的就是昨天那份）。
+         */
+        '<span class="spacer"></span>' +
+        '<button class="btn ghost sm" data-act="print-options" title="打印成 A4 清单">🖨 打印</button>' +
       '</div>' +
       (S.date === C.todayKey()
         ? ''
@@ -2707,6 +2718,289 @@ function fullTime(ts) {
   const d = new Date(ts);
   return d.getFullYear() + '-' + C.pad2(d.getMonth() + 1) + '-' + C.pad2(d.getDate()) + ' ' +
     C.pad2(d.getHours()) + ':' + C.pad2(d.getMinutes()) + ':' + C.pad2(d.getSeconds());
+}
+
+/* ============================================================
+ * 打印清单（第 97 轮）
+ *
+ * 纯前端：生成一块 #print-sheet，靠 @media print 把界面全隐藏、只留它，
+ * 然后 window.print() 调起系统打印对话框（手机上还能「另存为 PDF」）。
+ * 零依赖、不经过服务器、不碰存档。
+ * ============================================================ */
+
+/** 打印选项的默认值（记在 localStorage，跟设备走，不写进存档） */
+const PRINT_OPTS_DEFAULT = { tasks: true, note: true, msg: true, sign: true, done: false };
+
+function loadPrintOpts() {
+  let got = null;
+  try { got = JSON.parse(localStorage.getItem('hb_print_opts') || 'null'); } catch (e) { got = null; }
+  return Object.assign({}, PRINT_OPTS_DEFAULT, got || {});
+}
+
+function savePrintOpts() {
+  try { localStorage.setItem('hb_print_opts', JSON.stringify(S.printOpts)); } catch (e) { /* 存不了就算了 */ }
+}
+
+/*
+ * S 的字段初始化时还不能调 loadPrintOpts()（PRINT_OPTS_DEFAULT 在 TDZ），
+ * 所以真正读一次放在这里 —— 这两段都在 S 之后，模块加载时就执行。
+ */
+S.printOpts = loadPrintOpts();
+
+/**
+ * 一条作业/任务/额外任务值几朵小红花。
+ * **规则和卡片上「完成 +N⭐」完全一致**（第 1898、1952、2522 行那几处）：
+ *   · 作业：自己填了就用自己填的，没填就用「设置」里的默认值
+ *   · 每日任务 / 额外任务：用自己填的
+ * 打印出来的分数必须和网站上真会给的一样，不然孩子算出来的总数就对不上了。
+ */
+function pointsOf(st, kind, it) {
+  if (kind === 'homework') {
+    return it.points != null ? Number(it.points) || 0
+      : (Number(st.settings.homeworkPoints) || 0);
+  }
+  return Number(it.points) || 0;
+}
+
+/** 拼一行清单：□ + 灰块 + 内容 + 右侧得分 */
+function printRow(o) {
+  const tick = o.done ? ' done' : '';
+  const notes = (o.note ? '<div class="p-note">' + esc(o.note) + '</div>' : '') +
+    (o.att ? '<div class="p-att">' + esc(o.att) + '</div>' : '');
+  return '<div class="p-row">' +
+    '<span class="p-box' + tick + '"></span>' +
+    '<span class="p-subj">' + esc(o.face) + '</span>' +
+    '<div class="p-body">' +
+      '<div class="p-title">' + esc(o.title) +
+        (o.tag ? '<span class="p-tag">' + esc(o.tag) + '</span>' : '') + '</div>' +
+      notes +
+    '</div>' +
+    '<span class="p-pts">+' + o.points + '<span class="star">⭐</span></span>' +
+  '</div>';
+}
+
+/** 生成整张 A4 清单的 HTML */
+function printSheetHTML(date) {
+  const st = S.state;
+  const opt = S.printOpts;
+  const day = C.getDay(st, date);
+  const d = C.parseDateKey(date);
+  const today = C.todayKey();
+  const M = st.settings.homeworkPoints || 0;
+
+  const hw = (day.homeworks || []).slice();
+  // 每日任务：这一天有效的（已删除的、不在有效期的都不打）
+  const tasks = st.dailyTasks.filter(function (t) {
+    return !t.deleted && C.taskActiveOn(t, date, st.settings.holidays);
+  });
+  const extras = (day.extras || []).slice();
+  const taskList = opt.tasks ? tasks : [];
+
+  const hwCnt = hw.length;
+  const attText = function (it) {
+    const n = (it.attachments || []).length;
+    return n ? '📎 有 ' + n + ' 个附件（在网站上看）' : '';
+  };
+
+  /* ---------- 今天的作业 ---------- */
+  const hwHTML = hw.length ? '<section class="p-sec">' +
+    '<h2>今天的作业 <span class="n">（' + hwCnt + ' 项）</span></h2>' +
+    hw.map(function (h) {
+      const m = C.subjectMeta(h.subject);
+      return printRow({
+        face: h.subject || '其他',
+        title: h.title,
+        note: opt.note ? h.detail : '',
+        att: attText(h),
+        points: pointsOf(st, 'homework', h),
+        done: opt.done && h.done,
+      });
+    }).join('') +
+  '</section>' : '';
+
+  /* ---------- 每天要做的事 ---------- */
+  const taskHTML = taskList.length ? '<section class="p-sec">' +
+    '<h2>每天要做的事 <span class="n">（' + taskList.length + ' 件）</span></h2>' +
+    taskList.map(function (t) {
+      const r = day.tasks && day.tasks[t.id];
+      const v = C.taskView(t, r, date);
+      return printRow({
+        face: v.emoji || t.emoji || '⭐',
+        title: v.title || t.title,
+        note: opt.note ? (t.note || '') : '',
+        tag: v.tag || t.tag,
+        points: pointsOf(st, 'task', t),
+        done: opt.done && r && r.done,
+      });
+    }).join('') +
+  '</section>' : '';
+
+  /* ---------- 额外的任务 ---------- */
+  const extraHTML = extras.length ? '<section class="p-sec">' +
+    '<h2>额外的任务 <span class="n">（' + extras.length + ' 件）</span></h2>' +
+    extras.map(function (e) {
+      return printRow({
+        face: e.emoji || '✨',
+        title: e.title,
+        note: opt.note ? (e.note || '') : '',
+        points: pointsOf(st, 'extra', e),
+        done: opt.done && e.done,
+      });
+    }).join('') +
+  '</section>' : '';
+
+  /* ---------- 爸爸妈妈的话 ---------- */
+  const msgHTML = (opt.msg && day.note) ? '<section class="p-sec">' +
+    '<h2>爸爸妈妈的话</h2>' +
+    '<div class="p-msg">' + esc(day.note) + '</div>' +
+  '</section>' : '';
+
+  /* ---------- 哪里错了（永远留，给孩子写） ---------- */
+  const missHTML = '<section class="p-sec">' +
+    '<h2>哪里错了 <span class="n">（写一写没记牢的地方）</span></h2>' +
+    '<div class="p-lines">' +
+      '<div class="line"></div><div class="line"></div>' +
+      '<div class="line"></div><div class="line"></div>' +
+    '</div>' +
+  '</section>';
+
+  /* ---------- 页脚：签字 + 今天拿到 ---------- */
+  const sigHTML = (opt.sign
+    ? '<span class="p-sig"><span class="lab">学生签字</span><i></i></span>' +
+      '<span class="p-sig"><span class="lab">家长签字</span><i></i></span>'
+    : '') +
+    '<span class="p-total"><span class="lab">今天拿到</span><i></i>' +
+      '<span class="unit">朵 ⭐</span></span>';
+
+  const counts = ['<b>' + hwCnt + '</b> 项作业'];
+  if (taskList.length) counts.push('<b>' + taskList.length + '</b> 件每日任务');
+  if (extras.length) counts.push('<b>' + extras.length + '</b> 件额外任务');
+
+  return '' +
+    '<div class="p-head">' +
+      '<h1>作业清单</h1>' +
+      '<span class="p-who">' + esc(C.roomNameOf(st)) + '</span>' +
+      '<div class="p-date"><b>' + d.getFullYear() + '年' + (d.getMonth() + 1) + '月' +
+        d.getDate() + '日</b> ' + C.weekdayCN(date) + '</div>' +
+    '</div>' +
+    '<div class="p-head2">' +
+      '<span class="p-meta">作业小站 · 房间 ' + esc(S.room) + ' · 打印于 ' +
+        fullTime(Date.now()).slice(0, 16) + '</span>' +
+      '<span class="p-count">一共 ' + counts.join(' · ') + '</span>' +
+    '</div>' +
+    hwHTML + taskHTML + extraHTML + msgHTML + missHTML +
+    '<div class="p-foot">' + sigHTML + '</div>';
+}
+
+/** 打印选项小窗（用 openModal 自己搭，因为按钮要写「打印」不是「保存」） */
+function printOptionsModal() {
+  const box = document.createElement('div');
+  box.className = 'print-opts';
+  const items = [
+    ['tasks', '包含「每天要做的事」'],
+    ['note', '包含备注'],
+    ['msg', '包含「爸爸妈妈的话」'],
+    ['sign', '留签字栏（学生 + 家长）'],
+    ['done', '把已经完成的打上勾'],
+  ];
+  box.innerHTML = '<p class="hint" style="margin:0 0 .5rem">' +
+      '打出来是 <b>一张 A4</b>：清单式、每条前面一个方框，孩子可以用铅笔打勾。' +
+      '浏览器会弹打印对话框，那儿可以选打印机，也可以「另存为 PDF」。</p>' +
+    items.map(function (it) {
+      return '<label class="check-line print-opt">' +
+        '<input type="checkbox" data-opt="' + it[0] + '"' +
+          (S.printOpts[it[0]] ? ' checked' : '') + '>' +
+        '<span>' + it[1] + '</span></label>';
+    }).join('') +
+    '<p class="hint" style="margin:.5rem 0 0">' +
+      '小提示：打印对话框里如果看到网址、日期那种页眉页脚，' +
+      '把「页眉和页脚」的勾去掉，纸面会干净很多。</p>';
+  // 勾选状态直接记在 S.printOpts 上（formModal 的 values 拿不到勾选状态）
+  box.querySelectorAll('[data-opt]').forEach(function (el) {
+    el.addEventListener('change', function () {
+      S.printOpts[el.dataset.opt] = el.checked;
+    });
+  });
+  openModal({
+    title: '打印清单',
+    bodyNode: box,
+    actions: [
+      { label: '取消', cls: 'ghost', onClick: closeModal },
+      { label: '打印', cls: 'primary', onClick: function () {
+          savePrintOpts();
+          closeModal();
+          doPrint(S.date);
+        } },
+    ],
+  });
+}
+
+/**
+ * 清单最上面那条**只在屏幕上显示**的小工具条（第 98 轮）。
+ *
+ * 为什么要有它：
+ *   · 手机上 window.print() **不阻塞**，有的内置浏览器（钉钉 / 微信）甚至
+ *     实现了 print 但**什么都不做** —— 不弹对话框，也不报错。
+ *     这时候如果代码自己"过一会儿把白纸收掉"，用户看到的就是「闪一下就没了」。
+ *   · 所以清单**不会自己关**，由用户点这个「✕ 关闭清单」来关。
+ *   · 顺便把网址摆出来：内置浏览器打不了的话，复制到系统浏览器（Safari / Chrome）
+ *     里打开，再点一次打印就行。
+ *
+ * 这条工具条在 @media print 里会被藏掉，不会印到纸上。
+ */
+function printSheetBar() {
+  const url = location.origin + location.pathname + '?room=' + encodeURIComponent(S.room);
+  return '<div class="p-screen-bar">' +
+    '<button class="btn primary sm" data-act="print-close">✕ 关闭清单</button>' +
+    '<span class="p-screen-tip">没弹出打印对话框？把后面这个网址复制到' +
+      '<b>系统浏览器</b>（Safari / Chrome）打开，再点一次「🖨 打印」：' +
+      '<code>' + esc(url) + '</code></span>' +
+  '</div>';
+}
+
+/** 把清单从屏幕（预览）上收起来 —— 用户点「✕ 关闭清单」或 afterprint 时调 */
+function closePrintPreview() {
+  document.body.classList.remove('printing');
+}
+
+/**
+ * 真正去打印。
+ *
+ * `body.printing` 一加上，#print-sheet 就变成一张铺满屏幕的白纸（相当于预览），
+ * @media print 里再把其它东西全藏掉、把这张纸摆正。
+ *
+ * 第 98 轮修的一个真 bug：原来这里有个 `setTimeout(cleanup, 1500)` 兜底，
+ * 结果在手机上「清单闪一下就没了」—— 因为手机上 window.print() 是不阻塞的
+ * （有的内置浏览器干脆是空实现），1.5 秒后兜底照常触发，把白纸收掉了。
+ * 现在**绝不自作主张关闭**：关不关由用户点「✕ 关闭清单」，afterprint 只是辅助。
+ */
+function doPrint(date) {
+  let sheet = document.getElementById('print-sheet');
+  if (!sheet) {
+    sheet = document.createElement('div');
+    sheet.id = 'print-sheet';
+    sheet.className = 'print-sheet';
+    document.body.appendChild(sheet);
+  }
+  sheet.innerHTML = printSheetBar() + printSheetHTML(date);
+  document.body.classList.add('printing');
+  const onAfter = function () {
+    closePrintPreview();
+    window.removeEventListener('afterprint', onAfter);
+  };
+  window.addEventListener('afterprint', onAfter);
+
+  // 连 print 都没有（部分 WebView）：不装样子，直接说清楚
+  if (typeof window.print !== 'function') {
+    toast('这个浏览器不支持直接打印，请按清单上方的提示用系统浏览器打开', 'err');
+    return;
+  }
+  try {
+    window.print();
+  } catch (e) {
+    // 调用失败也不收清单 —— 用户还得看上面的提示
+    toast('调不起打印机：' + (e && e.message ? e.message : e), 'err');
+  }
 }
 
 function parentConfirm() {
@@ -3967,6 +4261,16 @@ function handlePasteAction(act, el, e) {
 /** handleHomeworkAction：作业和额外任务的增删改 + 排序（6 个动作） */
 function handleHomeworkAction(act, el, e) {
   switch (act) {
+    /* 第 97 轮：打印清单（纯前端，生成 #print-sheet 后 window.print()） */
+    case 'print-options': {
+      printOptionsModal();
+      break;
+    }
+    /* 第 98 轮：清单不再自动关，由用户点这个关 */
+    case 'print-close': {
+      closePrintPreview();
+      break;
+    }
     case 'move': {
       // 自定义排序：往上 / 往下挪一格
       const list = el.dataset.list;
@@ -5131,9 +5435,13 @@ document.addEventListener('click', function (e) {
      * **弹窗一定要算进来**：弹窗是挂在 body 上的兄弟节点，不在 #view 里面。
      * 漏掉它的话，弹窗里任何靠 data-act 委托的按钮都收不到点击
      * （踩过：任务/奖励里的上下加减）。
+     * **打印清单 (#print-sheet) 同理**（第 98 轮）：它也是 body 的直接子节点，
+     * 不列进来的话清单上那个「✕ 关闭清单」点了没反应（踩过）。
      */
-    if (e.target.closest('#view') || e.target.closest('#rest') || e.target.closest('#focusmask') ||
-        e.target.closest('.modal')) {
+    const inArea = e.target.closest('#view') || e.target.closest('#rest') ||
+      e.target.closest('#focusmask') || e.target.closest('.modal') ||
+      e.target.closest('#print-sheet');
+    if (inArea) {
       onViewClick(e);
     }
     pressedAct = null;

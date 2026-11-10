@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>打印样张 · 芒果的作业清单（带得分 · 第 3 版）</title>
+<style>
+/*
+ * ===== 样张 第 3 版 =====
+ * 相对第 2 版的三处改动：
+ *   ① 底部原「算一算」→ 改成「哪里错了（写一写没记牢的地方）」，只留书写行
+ *   ② 「今天拿到 ___ 朵 ⭐」放大加粗
+ *   ③ 这块从正文挪到**右下角**（家长签字那一行的右侧）
+ */
+@page { size: A4 portrait; margin: 12mm; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 210mm; min-height: 297mm; margin: 0 auto; padding: 12mm;
+  background: #fff; color: #000;
+  font: 12.5pt/1.5 "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+
+/* ---------- 页头 ---------- */
+/* 第一行：标题 + 孩子名 + 日期 */
+.head { display: flex; align-items: baseline; gap: .6rem; }
+.head h1 { font-size: 19pt; letter-spacing: .05em; }
+.head .who { font-size: 12pt; font-weight: 400; color: #333; }
+.head .date { margin-left: auto; font-size: 11.5pt; text-align: right; white-space: nowrap; }
+.head .date b { font-size: 13pt; }
+
+/*
+ * 第二行：出处小字**贴左边、和标题左对齐**，条数贴右边。
+ * 黑色粗线落在这行底下。
+ */
+.head2 {
+  display: flex; align-items: baseline; gap: .6rem;
+  padding: .1rem 0 .34rem; border-bottom: 2.5pt solid #000;
+}
+.head2 .meta { font-size: 8.5pt; color: #777; }
+.head2 .count { margin-left: auto; font-size: 11.5pt; white-space: nowrap; }
+
+/* ---------- 分区 ---------- */
+.sec { margin-top: .6rem; break-inside: auto; }
+.sec > h2 {
+  font-size: 12pt; letter-spacing: .04em;
+  padding: .14rem .5rem; background: #efefef; border-left: 4pt solid #000;
+  break-after: avoid;
+}
+.sec > h2 .n { font-weight: 400; color: #444; font-size: 10.5pt; }
+
+/* ---------- 清单行：□ + 科目 + 内容 + 得分 ---------- */
+.row {
+  display: flex; align-items: flex-start; gap: .5rem;
+  padding: .22rem .1rem; border-bottom: .5pt dashed #bbb;
+  break-inside: avoid;
+}
+.row:last-child { border-bottom: none; }
+
+/* 手写勾选的方框：8mm，铅笔好勾 */
+.box {
+  flex: none; width: 8mm; height: 8mm; margin-top: .1rem;
+  border: 1.4pt solid #000; border-radius: 1pt;
+}
+
+/*
+ * 科目 / 图标那个灰块：高度跟文字走（第 6 版回退到之前的做法）。
+ * 试过钉成 8mm 和勾选框一样高，但灰块里只有一个字/一个 emoji，
+ * 撑到 8mm 反而显空、字号看着也不对 —— 家长说恢复原样。
+ */
+.subj {
+  flex: none; width: 15mm; font-weight: 700; font-size: 11.5pt;
+  text-align: center; padding: .05rem 0; border-radius: 2pt;
+  background: #f2f2f2; border: .5pt solid #ccc;
+}
+
+.body { flex: 1; min-width: 0; }
+.title { font-size: 12.5pt; line-height: 1.4; }
+.note { font-size: 10pt; color: #333; margin-top: .05rem; white-space: pre-wrap; }
+.att { font-size: 9pt; color: #555; }
+.tag { font-size: 9pt; color: #555; border: .5pt solid #bbb; border-radius: 2pt;
+       padding: 0 .22rem; margin-left: .28rem; }
+
+/* 右侧得分：固定宽度、右对齐、等宽数字，一竖排看得很齐 */
+.pts {
+  flex: none; width: 17mm; text-align: right; white-space: nowrap;
+  font-size: 12pt; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding-top: .05rem;
+}
+.pts .star { font-weight: 400; font-size: 10pt; }
+
+/* ---------- 家长留言 ---------- */
+.note-box {
+  margin-top: .22rem; padding: .45rem .65rem; border: .8pt solid #999; border-radius: 3pt;
+  font-size: 11.5pt; white-space: pre-wrap; line-height: 1.5; min-height: 11mm;
+}
+
+/* ---------- 哪里错了（写一写没记牢的地方） ---------- */
+.mistakes {
+  margin-top: .22rem; padding: .4rem .6rem; border: 1pt solid #000; border-radius: 3pt;
+}
+.mistakes .line {
+  border-bottom: .5pt dashed #bbb; height: 8mm;
+}
+.mistakes .line:last-child { border-bottom: none; }
+
+/* ---------- 页脚：学生签字 ｜ 家长签字 ｜ 今天拿到 ___ 朵 ---------- */
+/* 上面那条横线去掉了（家长说不要），三样东西自己排干净就行 */
+.foot { margin-top: .7rem; }
+/*
+ * 三个「标签 + 横线」并排：学生签字 / 家长签字 / 今天拿到。
+ * 字号统一用 16pt 加粗（和原来「今天拿到」一样），三个看起来是一档东西。
+ * 横线用 border-bottom，不用方框 —— 孩子写字更自然，也省墨。
+ */
+.foot .rowA {
+  display: flex; align-items: flex-end; gap: .45rem .85rem; flex-wrap: wrap;
+}
+.sig { display: flex; align-items: flex-end; gap: .3rem; white-space: nowrap; }
+.sig .lab { font-size: 16pt; font-weight: 800; letter-spacing: .02em; }
+.sig i { display: inline-block; width: 30mm; border-bottom: 1.2pt solid #000; height: 7mm; }
+
+.total { margin-left: auto; display: flex; align-items: flex-end; gap: .35rem; white-space: nowrap; }
+.total .lab { font-size: 16pt; font-weight: 800; letter-spacing: .02em; }
+.total i { display: inline-block; width: 22mm; border-bottom: 1.2pt solid #000; height: 7mm; }
+/* 「今天拿到」和「朵」**同一个字号**（16pt 加粗），看着才是一句话 */
+.total .unit { font-size: 16pt; font-weight: 800; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <h1>作业清单</h1>
+  <span class="who">芒果</span>
+  <div class="date"><b>2026年11月10日</b> 星期二</div>
+</div>
+<div class="head2">
+  <span class="meta">作业小站 · 房间 QJJXJE · 打印于 2026-11-10 16:20</span>
+  <span class="count">一共 <b>4</b> 项作业 · <b>5</b> 件每日任务</span>
+</div>
+
+<!-- ================= 今天的作业 ================= -->
+<section class="sec">
+  <h2>今天的作业 <span class="n">（4 项）</span></h2>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">语文</span>
+    <div class="body">
+      <div class="title">背诵《静夜思》</div>
+      <div class="note">家长签字</div>
+    </div>
+    <span class="pts">+2<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">数学</span>
+    <div class="body">
+      <div class="title">口算练习册 P20</div>
+      <div class="att">📎 有 1 个附件（在网站上看）</div>
+    </div>
+    <span class="pts">+2<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">英语</span>
+    <div class="body">
+      <div class="title">跟读 Unit 3 三遍</div>
+      <div class="note">先听录音，再自己读一遍；读顺了再录给老师</div>
+    </div>
+    <span class="pts">+3<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">其他</span>
+    <div class="body">
+      <div class="title">明天带红领巾</div>
+    </div>
+    <span class="pts">+1<span class="star">⭐</span></span>
+  </div>
+</section>
+
+<!-- ================= 每天要做的事 ================= -->
+<section class="sec">
+  <h2>每天要做的事 <span class="n">（5 件）</span></h2>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">📖</span>
+    <div class="body"><div class="title">亲子阅读 15 分钟<span class="tag">功课</span></div></div>
+    <span class="pts">+2<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">🎒</span>
+    <div class="body"><div class="title">整理书包和书桌<span class="tag">生活</span></div></div>
+    <span class="pts">+1<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">🧹</span>
+    <div class="body"><div class="title">帮家里做家务<span class="tag">生活</span></div></div>
+    <span class="pts">+2<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">🌙</span>
+    <div class="body"><div class="title">晚上 9 点前上床睡觉<span class="tag">生活</span></div></div>
+    <span class="pts">+1<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">🏃</span>
+    <div class="body"><div class="title">运动 30 分钟<span class="tag">精神</span></div></div>
+    <span class="pts">+2<span class="star">⭐</span></span>
+  </div>
+</section>
+
+<!-- ================= 额外的任务 ================= -->
+<section class="sec">
+  <h2>额外的任务 <span class="n">（2 件）</span></h2>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">✨</span>
+    <div class="body">
+      <div class="title">给奶奶打个电话</div>
+      <div class="note">问问她膝盖好点没有</div>
+    </div>
+    <span class="pts">+1<span class="star">⭐</span></span>
+  </div>
+
+  <div class="row">
+    <span class="box"></span>
+    <span class="subj">🎨</span>
+    <div class="body"><div class="title">画一幅秋天的画</div></div>
+    <span class="pts">+2<span class="star">⭐</span></span>
+  </div>
+</section>
+
+<!-- ================= 爸爸妈妈的话 ================= -->
+<section class="sec">
+  <h2>爸爸妈妈的话</h2>
+  <div class="note-box">今天写字比昨天认真，妈妈看到了。
+明天数学口算慢一点没关系，检查一遍再交。</div>
+</section>
+
+<!-- ================= 哪里错了 ================= -->
+<section class="sec">
+  <h2>哪里错了 <span class="n">（写一写没记牢的地方）</span></h2>
+  <div class="mistakes">
+    <div class="line"></div>
+    <div class="line"></div>
+    <div class="line"></div>
+    <div class="line"></div>
+  </div>
+</section>
+
+<!-- ================= 页脚 ================= -->
+<div class="foot">
+  <div class="rowA">
+    <span class="sig"><span class="lab">学生签字</span><i></i></span>
+    <span class="sig"><span class="lab">家长签字</span><i></i></span>
+    <span class="total"><span class="lab">今天拿到</span><i></i><span class="unit">朵 ⭐</span></span>
+  </div>
+</div>
+
+</body>
+</html>

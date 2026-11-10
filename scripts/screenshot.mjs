@@ -33,12 +33,25 @@ async function pickFiles(selector, files) {
   await page.evaluate('(function(){var i=document.querySelector(' + JSON.stringify(selector) + ');' +
     'if(i) i.scrollIntoView({block:"center"});return 1;})()');
   await sleep(300);
-  const doc = await page.send('DOM.getDocument', { depth: -1 });
-  const found = await page.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: selector });
-  if (!found || !found.nodeId) return false;
-  await page.send('DOM.setFileInputFiles', { nodeId: found.nodeId, files: files });
-  await sleep(2500);
-  return true;
+  /*
+   * 取 nodeId → 设文件 这两步之间页面可能刚好重画过，
+   * 然后报 "Could not find node with given id"（偶发，不是真失败）。
+   * 所以重试两次，每次重新取一次文档。
+   */
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const doc = await page.send('DOM.getDocument', { depth: -1 });
+      const found = await page.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: selector });
+      if (!found || !found.nodeId) return false;
+      await page.send('DOM.setFileInputFiles', { nodeId: found.nodeId, files: files });
+      await sleep(2500);
+      return true;
+    } catch (e) {
+      if (attempt === 2) throw e;
+      await sleep(600);
+    }
+  }
+  return false;
 }
 
 /**
@@ -3258,6 +3271,245 @@ else {
     'return undone.length;})()');
   console.log('   今天的作业里还没打勾的：' + freshCopied + ' 条');
   await shot('43-copy-one');
+}
+
+/*
+ * ★ 第 97 轮：打印清单
+ *   按钮 → 选项小窗 → 生成 A4 清单（#print-sheet）→ window.print()
+ *   顺手用**真实数据和真实代码**重出一张 A4 样张（docs/images/print-sample.png），
+ *   这样每轮跑测试版式都是最新的，不会跟代码脱节。
+ *   注意：要把 window.print 拦掉，不然无头浏览器会卡在打印对话框上。
+ */
+{
+  await mustClick('#tabbar [data-view="parent"]', '家长标签');
+  await sleep(600);
+  await sleep(300);
+  if (!(await evaluate('Boolean(document.querySelector(\'[data-act="parent-tab"]\'))'))) {
+    for (const d of '1234') {
+      await mustClick('[data-act="pin-key"][data-key="' + d + '"]', '密码 ' + d);
+      await sleep(150);
+    }
+    await sleep(1200);
+  }
+  await mustClick('[data-act="parent-tab"][data-tab="hw"]', '录作业标签');
+  await sleep(800);
+
+  const pbtn = await evaluate('(function(){' +
+    'var b=document.querySelector(\'[data-act="print-options"]\');' +
+    'if(!b) return { has:false };' +
+    'var head=b.closest(".panel-head");' +
+    'var h2=head?head.querySelector("h2"):null;' +
+    'var br=b.getBoundingClientRect(), hr=h2?h2.getBoundingClientRect():null;' +
+    'return { has:true, text:b.textContent.trim(),' +
+    '  sameLine: hr ? Math.abs((br.top+br.height/2)-(hr.top+hr.height/2)) < 20 : false,' +
+    '  inHomeworkPanel: h2 ? /的作业/.test(h2.textContent) : false };})()');
+  console.log('   打印按钮：' + JSON.stringify(pbtn));
+  if (!pbtn.has) {
+    console.log('   ⚠️ 找不到「🖨 打印」按钮'); problems++;
+  } else {
+    if (!pbtn.inHomeworkPanel) { console.log('   ⚠️ 打印按钮不在「…的作业」面板头里'); problems++; }
+    if (!pbtn.sameLine) { console.log('   ⚠️ 打印按钮没和标题排在同一行'); problems++; }
+  }
+
+  // 选项小窗
+  await mustClick('[data-act="print-options"]', '🖨 打印');
+  await sleep(800);
+  const pdlg = await evaluate('(function(){' +
+    'var m=document.querySelector(".modal"); if(!m) return { open:false };' +
+    'return { open:true, title:(m.querySelector("h3")||{}).textContent||"",' +
+    '  opts:[].slice.call(m.querySelectorAll("[data-opt]")).map(function(el){' +
+    '    return el.dataset.opt+"="+(el.checked?"on":"off");}),' +
+    '  btns:[].slice.call(m.querySelectorAll(".btn")).map(function(b){return b.textContent.trim();}) };})()');
+  console.log('   打印选项：' + JSON.stringify(pdlg));
+  if (!pdlg.open) {
+    console.log('   ⚠️ 点打印没弹出选项小窗'); problems++;
+  } else {
+    if (pdlg.opts.join(',') !== 'tasks=on,note=on,msg=on,sign=on,done=off') {
+      console.log('   ⚠️ 五个选项的默认值不对：' + pdlg.opts.join(',')); problems++;
+    }
+    if (pdlg.btns.join(',') !== '取消,打印') {
+      console.log('   ⚠️ 按钮应该是「取消 / 打印」：' + pdlg.btns.join(',')); problems++;
+    }
+  }
+
+  // 拦掉真正的打印，然后点「打印」
+  await evaluate('(function(){ window.__printed=0; window.print=function(){ window.__printed++; }; return 1; })()');
+  await mustClick('.modal .btn.primary', '打印');
+  await sleep(1000);
+
+  const sheet = await evaluate('(function(){' +
+    'var s=document.getElementById("print-sheet"); if(!s) return { none:true };' +
+    'var q=function(x){ return s.querySelectorAll(x).length; };' +
+    'return { none:false, printed:window.__printed,' +
+    '  display:getComputedStyle(s).display,' +
+    '  h1:(s.querySelector(".p-head h1")||{}).textContent||"",' +
+    '  who:(s.querySelector(".p-who")||{}).textContent||"",' +
+    '  date:(s.querySelector(".p-date")||{}).textContent.replace(/\\s+/g," ").trim()||"",' +
+    '  meta:(s.querySelector(".p-meta")||{}).textContent||"",' +
+    '  count:(s.querySelector(".p-count")||{}).textContent.replace(/\\s+/g," ").trim()||"",' +
+    '  secs:[].slice.call(s.querySelectorAll(".p-sec > h2")).map(function(h){' +
+    '    return h.textContent.replace(/\\s+/g," ").trim();}),' +
+    '  rows:q(".p-row"), boxes:q(".p-box"), lines:q(".p-lines .line"),' +
+    '  pts:[].slice.call(s.querySelectorAll(".p-pts")).map(function(x){return x.textContent.trim();}),' +
+    '  sigs:[].slice.call(s.querySelectorAll(".p-sig .lab")).map(function(x){return x.textContent.trim();}),' +
+    '  total:(s.querySelector(".p-total")||{}).textContent.replace(/\\s+/g," ").trim()||"",' +
+    '  printedStyle:(function(){var p=s; while(p && !/print/.test(p.className||"")) p=null;' +
+    '    return Boolean(p);})() };})()');
+  console.log('   生成的清单：' + JSON.stringify({ h1: sheet.h1, who: sheet.who, date: sheet.date,
+    count: sheet.count, secs: sheet.secs, rows: sheet.rows, pts: sheet.pts, total: sheet.total }));
+  if (sheet.none) {
+    console.log('   ⚠️ 没生成 #print-sheet'); problems++;
+  } else {
+    if (sheet.printed < 1) { console.log('   ⚠️ 没调起 window.print()'); problems++; }
+    if (sheet.display !== 'block') { console.log('   ⚠️ 清单没显示出来（预览）'); problems++; }
+    if (sheet.h1 !== '作业清单') { console.log('   ⚠️ 标题不是「作业清单」：' + sheet.h1); problems++; }
+    if (!sheet.who) { console.log('   ⚠️ 标题旁边没有孩子名'); problems++; }
+    if (!(/年.*月.*日/.test(sheet.date) && /星期|周/.test(sheet.date))) {
+      console.log('   ⚠️ 日期行不对：' + sheet.date); problems++;
+    }
+    if (sheet.meta.indexOf('房间') < 0) { console.log('   ⚠️ 出处小字里没有房间码：' + sheet.meta); problems++; }
+    if (!/一共 \d+ 项作业/.test(sheet.count)) {
+      console.log('   ⚠️ 条数行不对：' + sheet.count); problems++;
+    }
+    if (sheet.secs[0].indexOf('今天的作业') !== 0) {
+      console.log('   ⚠️ 第一个分区不是「今天的作业」：' + sheet.secs.join(' | ')); problems++;
+    }
+    if (!sheet.secs.some(function (x) { return x.indexOf('哪里错了') === 0; })) {
+      console.log('   ⚠️ 清单里没有「哪里错了」：' + sheet.secs.join(' | ')); problems++;
+    }
+    if (sheet.boxes !== sheet.rows) {
+      console.log('   ⚠️ 勾选框和行数对不上：' + sheet.boxes + ' vs ' + sheet.rows); problems++;
+    }
+    if (sheet.pts.length !== sheet.rows ||
+        !sheet.pts.every(function (x) { return /^\+\d+⭐$/.test(x); })) {
+      console.log('   ⚠️ 得分列不对：' + sheet.pts.join(',')); problems++;
+    }
+    if (sheet.lines !== 4) { console.log('   ⚠️ 「哪里错了」应该有 4 条书写行：' + sheet.lines); problems++; }
+    if (sheet.sigs.join(',') !== '学生签字,家长签字') {
+      console.log('   ⚠️ 页脚签字不对：' + sheet.sigs.join(',')); problems++;
+    }
+    if (!/今天拿到.*朵 ⭐/.test(sheet.total)) {
+      console.log('   ⚠️ 页脚没有「今天拿到 … 朵 ⭐」：' + sheet.total); problems++;
+    }
+
+    /*
+     * ★ 第 98 轮：清单**绝不能自己关**。
+     *   原来 doPrint 里有个 1.5 秒兜底清理，手机上 window.print() 不阻塞
+     *   （内置浏览器甚至什么都不做），于是「闪一下就没了」。
+     *   这里等 3 秒（远超 1.5 秒）确认它还在。
+     */
+    await sleep(3000);
+    const stillOpen = await evaluate('(function(){' +
+      'var s=document.getElementById("print-sheet");' +
+      'return { printing:document.body.classList.contains("printing"),' +
+      '  display:s?getComputedStyle(s).display:"(没有)" };})()');
+    console.log('   等 3 秒之后清单还在吗：' + JSON.stringify(stillOpen));
+    if (stillOpen.printing !== true || stillOpen.display !== 'block') {
+      console.log('   ⚠️ 清单自己关掉了（手机上会表现为「闪一下就没」）：' + JSON.stringify(stillOpen));
+      problems++;
+    }
+
+    /* 工具条：有「✕ 关闭清单」+ 拷网址的提示 */
+    const bar = await evaluate('(function(){' +
+      'var b=document.querySelector("#print-sheet .p-screen-bar");' +
+      'if(!b) return { has:false };' +
+      'var btn=b.querySelector(\'[data-act="print-close"]\');' +
+      'var code=b.querySelector("code");' +
+      'return { has:true, btn:btn?btn.textContent.trim():"(没有按钮)",' +
+      '  url:code?code.textContent:"(没有网址)",' +
+      '  tip:b.textContent.replace(/\\s+/g," ").trim().slice(0,60) };})()');
+    console.log('   屏幕上那条工具条：' + JSON.stringify(bar));
+    if (!bar.has) {
+      console.log('   ⚠️ 清单顶部没有工具条（用户就没法关它了）'); problems++;
+    } else {
+      if (bar.btn.indexOf('关闭清单') < 0) {
+        console.log('   ⚠️ 工具条上的按钮不对：' + bar.btn); problems++;
+      }
+      if (!/room=/.test(bar.url)) {
+        console.log('   ⚠️ 工具条里没给出可复制的网址：' + bar.url); problems++;
+      }
+    }
+
+    /* 打印时这条工具条不能印到纸上 */
+    await page.send('Emulation.setEmulatedMedia', { media: 'print' });
+    await sleep(300);
+    const barInPrint = await evaluate('(function(){' +
+      'var b=document.querySelector("#print-sheet .p-screen-bar");' +
+      'return b?getComputedStyle(b).display:"(没有)";})()');
+    await page.send('Emulation.setEmulatedMedia', { media: '' });
+    await sleep(200);
+    console.log('   打印媒体下工具条的 display：' + JSON.stringify(barInPrint));
+    if (barInPrint !== 'none') {
+      console.log('   ⚠️ 工具条会被印到纸上：' + barInPrint); problems++;
+    }
+
+    /* 点「✕ 关闭清单」能正常关掉 */
+    await mustClick('[data-act="print-close"]', '✕ 关闭清单');
+    await sleep(600);
+    const afterClose = await evaluate('Boolean(document.body.classList.contains("printing"))');
+    console.log('   点「✕ 关闭清单」之后还在 printing 吗：' + afterClose);
+    if (afterClose !== false) {
+      console.log('   ⚠️ 点「✕ 关闭清单」没能关掉预览'); problems++;
+    }
+
+    /* ---- 用真实数据重出 A4 样张 ---- */
+    // 上面已经关掉了，重新挂上 printing 再排版截图
+    await evaluate('(function(){' +
+      'document.body.classList.add("printing");' +
+      'var s=document.getElementById("print-sheet");' +
+      's.style.position="static"; s.style.width="794px"; s.style.height="auto";' +
+      's.style.overflow="visible"; s.style.boxShadow="none"; s.style.transform="none";' +
+      's.style.inset="auto"; s.style.left="auto"; s.style.top="auto"; s.style.margin="0";' +
+      // 工具条是屏幕专用的，截图里不要它
+      'var bar=s.querySelector(".p-screen-bar"); if(bar) bar.style.display="none";' +
+      'window.scrollTo(0,0); return 1;})()');
+    await sleep(400);
+    const geom = await evaluate('(function(){' +
+      'var s=document.getElementById("print-sheet");' +
+      'var r=s.getBoundingClientRect();' +
+      'var rows=[].slice.call(s.querySelectorAll(".p-row"));' +
+      'return { w:Math.round(r.width), h:Math.round(r.height),' +
+      '  left:Math.round(r.left), top:Math.round(r.top),' +
+      '  rows:rows.length,' +
+      // 每一行都得是 break-inside: avoid —— 这样两页之间不会把一条作业劈成两半
+      '  allAvoid: rows.every(function(x){' +
+      '    return getComputedStyle(x).breakInside === "avoid";}) };})()');
+    console.log('   A4 样张尺寸：' + JSON.stringify(geom));
+    if (geom.w < 780 || geom.w > 810) {
+      console.log('   ⚠️ 清单不是 A4 宽（应约 794px）：' + geom.w); problems++;
+    }
+    /*
+     * 别硬要求"一页装下"：一行大约 60px，一页 A4 约 13 行。
+     * 测试房间有 15 行，本来就该排到第二页 —— 关键是**行不能被切断**。
+     */
+    const pages = Math.ceil(geom.h / 1123);
+    if (pages > 3) {
+      console.log('   ⚠️ 清单要 ' + pages + ' 页，太长了（可能排版失控）'); problems++;
+    }
+    if (!geom.allAvoid) {
+      console.log('   ⚠️ 有清单行没设 break-inside: avoid —— 打印时可能被切成两半'); problems++;
+    }
+    try {
+      const pshot = await page.send('Page.captureScreenshot', {
+        format: 'png',
+        clip: { x: geom.left, y: geom.top, width: geom.w, height: geom.h, scale: 2 },
+        captureBeyondViewport: true,
+      });
+      // 测试图的房间名/分值都是造出来的，别覆盖 docs 里那张漂亮的样张
+      const outPng = path.join(OUT, 'print-sheet.png');
+      fs.mkdirSync(path.dirname(outPng), { recursive: true });
+      fs.writeFileSync(outPng, Buffer.from(pshot.data, 'base64'));
+      console.log('   打印清单截图：tmp/shots/print-sheet.png（' + pages + ' 页，' +
+        geom.rows + ' 行）');
+    } catch (e) {
+      console.log('   ⚠️ 清单截图失败：' + e.message); problems++;
+    }
+    // 收工：把预览关掉、把拦截的 print 还原（不影响后面的测试）
+    await evaluate('(function(){ document.body.classList.remove("printing");' +
+      'var s=document.getElementById("print-sheet"); if(s) s.removeAttribute("style");' +
+      'delete window.print; return 1;})()');
+    await sleep(300);
+  }
 }
 
 /* ---- 专注时间：整页倒计时 ---- */

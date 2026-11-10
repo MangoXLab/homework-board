@@ -1461,3 +1461,186 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ============================================================
+ * 打印清单（第 97 轮）
+ *
+ * 版式是家长逐版确认过的（A4 竖版，一张纸）：
+ *   页头两行 → 作业 / 每日任务 / 额外任务 三张清单
+ *   → 爸爸妈妈的话 → 哪里错了（书写行）
+ *   → 页脚：学生签字 ｜ 家长签字 ｜ 今天拿到 ___ 朵 ⭐
+ *
+ * 只在「打印中」或真正打印时出现：平时 display:none，
+ * body.printing 时铺满屏幕当预览用，@media print 里把其它东西全藏掉。
+ * ============================================================ */
+
+.print-sheet { display: none; }
+
+/* ---------- 屏幕上当预览：一张白纸盖住整个界面 ---------- */
+body.printing { overflow: hidden; }
+body.printing .print-sheet {
+  display: block; position: fixed; inset: 0; z-index: 900;
+  overflow: auto; background: #fff; color: #000;
+  padding: 12mm 14mm;
+  /* 正文用打印字号；屏幕上 210mm 宽刚好是一张 A4 */
+  font: 12.5pt/1.5 "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+@media (min-width: 800px) {
+  body.printing .print-sheet {
+    width: 210mm; height: 297mm; inset: auto; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, .3);
+  }
+}
+
+/* ---------- 屏幕上那条小工具条（打印时会藏掉）---------- */
+/*
+ * 第 98 轮加的。手机上 window.print() 不阻塞、内置浏览器甚至可能什么都不做，
+ * 所以清单**不自己关**：靠这个「✕ 关闭清单」关，顺便把网址摆出来让用户
+ * 复制到系统浏览器去打。sticky 顶在最上面，滚多远都能点到。
+ */
+.print-sheet .p-screen-bar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin: 0 0 .9rem; padding: .55rem .7rem;
+  background: #fffbe9; border: .1rem solid #ffd88a; border-radius: .55rem;
+  font-size: .8rem; line-height: 1.5; color: #6b5320;
+}
+.print-sheet .p-screen-bar code {
+  background: #f3e8cf; padding: .06rem .32rem; border-radius: .3rem;
+  font-size: .74rem; word-break: break-all;
+}
+.print-sheet .p-screen-bar .btn { flex: none; }
+.print-sheet .p-screen-tip { flex: 1 1 12rem; min-width: 0; }
+
+/* ---------- 页头第一行：标题 + 孩子名 + 日期 ---------- */
+.print-sheet .p-head { display: flex; align-items: baseline; gap: .6rem; }
+.print-sheet .p-head h1 { font-size: 19pt; letter-spacing: .05em; margin: 0; }
+.print-sheet .p-who { font-size: 12pt; color: #333; }
+.print-sheet .p-date { margin-left: auto; font-size: 11.5pt; text-align: right; white-space: nowrap; }
+.print-sheet .p-date b { font-size: 13pt; }
+
+/* 第二行：出处小字贴左（和标题左对齐），条数贴右；黑色粗线在这行底下 */
+.print-sheet .p-head2 {
+  display: flex; align-items: baseline; gap: .6rem;
+  padding: .1rem 0 .34rem; border-bottom: 2.5pt solid #000;
+}
+.print-sheet .p-meta { font-size: 8.5pt; color: #777; }
+.print-sheet .p-count { margin-left: auto; font-size: 11.5pt; white-space: nowrap; }
+
+/* ---------- 分区 ---------- */
+.print-sheet .p-sec { margin-top: .6rem; }
+.print-sheet .p-sec > h2 {
+  font-size: 12pt; letter-spacing: .04em; font-weight: 700;
+  padding: .14rem .5rem; background: #efefef; border-left: 4pt solid #000;
+  break-after: avoid; page-break-after: avoid;
+}
+.print-sheet .p-sec > h2 .n { font-weight: 400; color: #444; font-size: 10.5pt; }
+
+/* ---------- 清单行：□ + 灰块 + 内容 + 右侧得分 ---------- */
+.print-sheet .p-row {
+  display: flex; align-items: flex-start; gap: .5rem;
+  padding: .22rem .1rem; border-bottom: .5pt dashed #bbb;
+  break-inside: avoid; page-break-inside: avoid;
+}
+.print-sheet .p-row:last-child { border-bottom: none; }
+
+/* 手写勾选的方框：8mm，铅笔好勾 */
+.print-sheet .p-box {
+  flex: none; width: 8mm; height: 8mm; margin-top: .1rem;
+  border: 1.4pt solid #000; border-radius: 1pt;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12pt; line-height: 1;
+}
+/* 「把已经完成的打上勾」时，方框里画个勾 */
+.print-sheet .p-box.done::after { content: '✓'; font-weight: 700; }
+
+/* 科目 / 图标那个灰块：高度跟文字走（不要钉死高度，撑开会发空） */
+.print-sheet .p-subj {
+  flex: none; width: 15mm; font-weight: 700; font-size: 11.5pt;
+  text-align: center; padding: .05rem 0; border-radius: 2pt;
+  background: #f2f2f2; border: .5pt solid #ccc;
+}
+
+.print-sheet .p-body { flex: 1; min-width: 0; }
+.print-sheet .p-title { font-size: 12.5pt; line-height: 1.4; }
+.print-sheet .p-tag {
+  font-size: 9pt; color: #555; border: .5pt solid #bbb; border-radius: 2pt;
+  padding: 0 .22rem; margin-left: .28rem;
+}
+.print-sheet .p-note { font-size: 10pt; color: #333; margin-top: .05rem; white-space: pre-wrap; }
+.print-sheet .p-att { font-size: 9pt; color: #555; }
+
+/* 右侧得分：固定宽度、右对齐、等宽数字，一竖排看得很齐 */
+.print-sheet .p-pts {
+  flex: none; width: 17mm; text-align: right; white-space: nowrap;
+  font-size: 12pt; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding-top: .05rem;
+}
+.print-sheet .p-pts .star { font-weight: 400; font-size: 10pt; }
+
+/* ---------- 爸爸妈妈的话 ---------- */
+.print-sheet .p-msg {
+  margin-top: .22rem; padding: .45rem .65rem;
+  border: .8pt solid #999; border-radius: 3pt;
+  font-size: 11.5pt; white-space: pre-wrap; line-height: 1.5; min-height: 11mm;
+}
+
+/* ---------- 哪里错了：四条书写行 ---------- */
+.print-sheet .p-lines {
+  margin-top: .22rem; padding: .4rem .6rem;
+  border: 1pt solid #000; border-radius: 3pt;
+}
+.print-sheet .p-lines .line { border-bottom: .5pt dashed #bbb; height: 8mm; }
+.print-sheet .p-lines .line:last-child { border-bottom: none; }
+
+/* ---------- 页脚：学生签字 ｜ 家长签字 ｜ 今天拿到 ___ 朵 ---------- */
+.print-sheet .p-foot {
+  margin-top: .7rem; display: flex; align-items: flex-end;
+  gap: .45rem .85rem; flex-wrap: wrap;
+}
+.print-sheet .p-sig { display: flex; align-items: flex-end; gap: .3rem; white-space: nowrap; }
+.print-sheet .p-sig .lab { font-size: 16pt; font-weight: 800; letter-spacing: .02em; }
+.print-sheet .p-sig i {
+  display: inline-block; width: 30mm; border-bottom: 1.2pt solid #000; height: 7mm;
+}
+.print-sheet .p-total {
+  margin-left: auto; display: flex; align-items: flex-end; gap: .35rem; white-space: nowrap;
+}
+.print-sheet .p-total .lab { font-size: 16pt; font-weight: 800; letter-spacing: .02em; }
+.print-sheet .p-total i {
+  display: inline-block; width: 22mm; border-bottom: 1.2pt solid #000; height: 7mm;
+}
+.print-sheet .p-total .unit { font-size: 16pt; font-weight: 800; }
+
+/* ---------- 打印选项小窗里的勾选行 ---------- */
+.print-opts .print-opt { display: flex; align-items: center; gap: .45rem; padding: .28rem 0; }
+.print-opts .print-opt input { width: 1.05rem; height: 1.05rem; flex: none; }
+
+/* ============================================================
+ * 真正的打印：只留那张清单
+ * ============================================================ */
+@page { size: A4 portrait; margin: 12mm; }
+
+@media print {
+  /* 界面全藏掉（#print-sheet 是 body 的直接子节点） */
+  body > *:not(#print-sheet) { display: none !important; }
+  body, html { background: #fff !important; }
+
+  .print-sheet {
+    display: block !important;
+    position: static !important; inset: auto !important;
+    width: auto !important; height: auto !important;
+    transform: none !important; box-shadow: none !important;
+    overflow: visible !important;
+    /* @page 已经给了 12mm 页边距，这里不要再加内边距 */
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  /* 页眉页脚（网址、日期）由浏览器加，没法用 CSS 关掉，只能提醒用户手动取消 */
+
+  /* 屏幕上那条工具条绝不印到纸上 */
+  .print-sheet .p-screen-bar { display: none !important; }
+}
+
